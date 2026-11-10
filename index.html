@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Crate Pushers</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #1c1830; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #f6f0e6; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 1px 3px #000a; }
+  #lvl { top: max(12px, env(safe-area-inset-top)); left: max(14px, env(safe-area-inset-left)); font-weight: 800; font-size: 19px; line-height: 1.2; max-width: calc(100vw - 170px); }
+  #lvl small { display: block; font-size: 13px; font-weight: 600; opacity: .8; font-variant-numeric: tabular-nums; }
+  #tools { position: fixed; top: max(10px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); display: flex; gap: 8px; }
+  #tools button { min-width: 64px; height: 44px; padding: 0 10px; border-radius: 12px; border: 1px solid #ffffff33; background: #2c2547e6; color: #fff; font: 700 14px system-ui, sans-serif; cursor: pointer; touch-action: none; }
+  #tools button.on { background: #ffb347; color: #2a1600; border-color: #ffb347; }
+  #vote { top: calc(max(12px, env(safe-area-inset-top)) + 54px); left: 50%; transform: translateX(-50%); padding: 7px 14px; border-radius: 12px; background: #ffb347; color: #2a1600;
+          font-weight: 800; font-size: 14px; text-shadow: none; white-space: nowrap; box-shadow: 0 4px 14px #0007; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; }
+  #vote:empty { display: none; }
+  #hint { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 24px); left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); text-align: center; font-size: 15px; font-weight: 600; color: #ffd98a; }
+  #net { bottom: max(8px, env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); font-size: 12px; opacity: .75; white-space: nowrap; }
+  #msg { top: 34%; left: 0; right: 0; text-align: center; font-size: 34px; font-weight: 900; color: #ffd23f; transition: opacity .35s, transform .35s; opacity: 0; transform: scale(.8); }
+  #msg.on { opacity: 1; transform: scale(1); }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #0d0b1cb8; }
+  #over[hidden], #pad[hidden], #tools[hidden] { display: none; }
+  .card { width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 22px; border-radius: 16px; background: #2a2346; border: 1px solid #ffffff22; text-align: center; box-sizing: border-box; }
+  .card h2 { margin: 0 0 4px; font-size: 26px; color: #ffd23f; }
+  .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ffb347; text-align: left; }
+  .card ol { text-align: left; margin: 0; padding-left: 24px; font-size: 14px; } .card li span { float: right; font-variant-numeric: tabular-nums; }
+  button.go { width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; background: #52d273; color: #07210f; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+  #pad { position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 18px); width: 174px; height: 174px; display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr); gap: 3px; }
+  #pad button { border-radius: 14px; border: 2px solid #ffffff55; background: #ffffff1c; color: #fff; font: 800 20px system-ui, sans-serif; touch-action: none; padding: 0; }
+  #pad button.on { background: #ffffff55; }
+  #pad [data-d="0"] { grid-area: 1 / 2; } #pad [data-d="3"] { grid-area: 2 / 1; } #pad [data-d="1"] { grid-area: 2 / 3; } #pad [data-d="2"] { grid-area: 3 / 2; }
+  @media (orientation: portrait) { .touch #hint { bottom: auto; top: calc(max(12px, env(safe-area-inset-top)) + 100px); } }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="lvl"></div>
+<div id="tools"><button id="undo" title="Undo the last push (Z)">↶ Undo</button><button id="reset" title="Start the level again (R)">⟲ Reset</button></div>
+<div class="hud" id="vote"></div>
+<div class="hud" id="hint"></div>
+<div class="hud" id="msg"></div>
+<div class="hud" id="net">Connecting…</div>
+<div id="pad" hidden><button data-d="0">▲</button><button data-d="3">◀</button><button data-d="1">▶</button><button data-d="2">▼</button></div>
+<div id="over" hidden><div class="card">
+  <h2>Warehouse cleared!</h2>
+  <div id="doneTime"></div>
+  <h3>Fastest crews</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="again">Play again</button>
+</div></div>
+<script>
+/* ═══ CRATE PUSHERS · a Multiplayer Agent starter ═══════════════════════════════════════
+ * Push every crate onto its pad, together. Co-op, 1–4 players; bot buddies fill empty seats.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ speeds, timers, votes, and the LEVELS drawn as text maps (legend inside)
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   LEVELS ........ reads the text maps: walls, floor, pads, crates, spawns
+ *   RUN (HOST) .... pushes, steel crates needing two, undo/reset votes, level clear, next level
+ *   PLANNER ....... finds a way to push one crate onto a pad (the bots use it)
+ *   BOTS .......... the buddies: push wood crates, back you up on steel ones, ask for a hand
+ *   ME ............ walking on the grid and leaning on crates. Each player writes only its own.
+ *   DRAW .......... floor, walls, pads, crates sliding, players, sparkles
+ *   HUD & DONE .... level name, timer, vote banner, the final card, leaderboard
+ *   INPUT ......... keyboard, D-pad buttons, drag to walk
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each player writes its OWN entity: `p` (one JSON field: grid cell, facing, level key)
+ *     whenever it steps, `hb` (heartbeat) once a second, `n`/`c` (name, color) once.
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. Only the host moves crates. It writes ONE shared field `game`
+ *     (id, version `v`, level, try, phase, every crate's cell, the open vote, timers) when
+ *     something changes, `hist` (the undo steps) and `bots`. A new host adopts all of it.
+ *   - Intents to the host: "push" {i, x, y, d, px, py} (I lean on crate i from cell px,py),
+ *     "vote" {k: "undo"|"reset"}, "again" {}. Walking into an empty cell needs no one's OK.
+ *     A crate moves when enough players stand in one line behind it, all pushing that way
+ *     within CONFIG.pushWindow ms: one for wood, two for steel. Each pusher sees the crate
+ *     move and steps forward itself.
+ *   - Undo puts every crate back one push and sends players to where they stood (`back`).
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "fastest-run": all levels from the start, stored as 3600000 - ms
+ *     (boards keep the highest score), shown on the final card.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 2,             // bots fill the room up to this many players: alone, you get one buddy
+  stepMs: 135,          // ms to walk one tile
+  botStepMs: 300,       // a bot's ms per tile (slower than you)
+  botThinkMs: [700, 1600], // a bot's pause before it starts on a crate (min, max)
+  botStartMs: 2500,     // bots look around this long when a level starts
+  leaveForYou: 20000,   // bots leave one wood crate per player, unless no player has pushed for this long (ms)
+  pushWindow: 650,      // ms: pushes this close together count as "at the same time"
+  pushWaitMs: 650,      // ms you lean on a crate waiting for it to move
+  pushRepeatMs: 180,    // ms between push intents while you hold a direction into a crate
+  voteMs: 10000,        // how long an undo/reset vote stays open
+  history: 12,          // undo steps kept
+  clearFor: 2800,       // ms the "level clear" moment lasts
+  doneFor: 30000,       // ms the final card shows before a new run starts
+  board: "fastest-run",
+  // Map legend: # wall · . floor · s spawn (4 per level) · (space) outside
+  //   c wood crate  → o wood pad      h steel crate (needs two pushers in a line) → O steel pad
+  levels: [
+    { name: "Warm-up", hint: "Walk into a crate to push it. Get every crate onto a glowing pad.", map: [
+      "############",
+      "#..........#",
+      "#s..c....o.#",
+      "#s.........#",
+      "#s..c....o.#",
+      "#s.........#",
+      "############"] },
+    { name: "Steel needs two", hint: "Steel crates need two pushers: line up behind it and push together.", map: [
+      "#############",
+      "#...........#",
+      "#s..h....O..#",
+      "#s..........#",
+      "#######.....#",
+      "#s..c.....o.#",
+      "#s..........#",
+      "#############"] },
+    { name: "Round the corner", hint: "Push a crate into a corner and it's stuck there. Vote Undo if that happens.", map: [
+      "#############",
+      "#s...#......#",
+      "#s.c.#.c..o.#",
+      "#....#......#",
+      "#..c........#",
+      "#s......##o.#",
+      "#s...o..##..#",
+      "#############"] },
+    { name: "Two by two", hint: "Two steel crates, two wood ones. Split up, then team up.", map: [
+      "##############",
+      "#s..........s#",
+      "#............#",
+      "#...h....h...#",
+      "#..c......c..#",
+      "#............#",
+      "#...O....O...#",
+      "#s.o......o.s#",
+      "##############"] },
+    { name: "Big order", hint: "Fill the back of the bay first, or the second steel crate won't fit.", map: [
+      "#############",
+      "#s.........s#",
+      "#...........#",
+      "#..h.....h..#",
+      "#...........#",
+      "#.c.#...#.c.#",
+      "#...#.O.#...#",
+      "#o..#.O.#..o#",
+      "#s..#...#..s#",
+      "#############"] },
+  ],
+};
+const BOT_NAMES = ["Buddy", "Forklift", "Dolly", "Hauler"];
+const COLORS = ["#ff5d73", "#4dabff", "#ffd23f", "#52d273", "#c77dff", "#ff8c42"];
+const DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0]; // directions: 0 up, 1 right, 2 down, 3 left
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'crate-pushers',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A shared JSON field, parsed once per change (read-only: never mutate what this returns). */
+function shared(key, fallback) {
+  const raw = S.shared[key], m = memo.get(key);
+  if (m && m.raw === raw) return m.v;
+  const v = parse(raw, fallback); memo.set(key, { raw, v }); return v;
+}
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map(); // sessionId -> { hb, at } on OUR clock
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+const humanIds = () => livePlayers().filter((id) => !(ATTRACT && id === net.sessionId));
+
+// ── LEVELS ──────────────────────────────────────────────────────────────────────────
+/** A text map as lists: floor cells, pads, crates (with `heavy` for steel), spawns. */
+function readLevel(def) {
+  const cols = Math.max(...def.map.map((r) => r.length)), rows = def.map.length;
+  const L = { name: def.name, hint: def.hint, cols, rows, floor: [], wall: [], pads: [], crates: [], spawns: [] };
+  def.map.forEach((row, y) => [...row.padEnd(cols)].forEach((ch, x) => {
+    L.wall[y * cols + x] = ch === "#";
+    L.floor[y * cols + x] = ch !== "#" && ch !== " ";
+    if (ch === "o" || ch === "O") L.pads.push({ x, y, heavy: ch === "O" });
+    if (ch === "c" || ch === "h") L.crates.push({ x, y, heavy: ch === "h" });
+    if (ch === "s") L.spawns.push({ x, y });
+  }));
+  return L;
+}
+const LEVELS = CONFIG.levels.map(readLevel);
+const isFloor = (L, x, y) => x >= 0 && y >= 0 && x < L.cols && y < L.rows && L.floor[y * L.cols + x];
+const isWall = (L, x, y) => x >= 0 && y >= 0 && x < L.cols && y < L.rows && L.wall[y * L.cols + x];
+const crateAt = (g, x, y) => g.cr.findIndex((c) => c[0] === x && c[1] === y);
+/** Is crate i resting on a pad of its own kind? */
+const onPad = (L, g, i) => L.pads.some((p) => p.heavy === L.crates[i].heavy && p.x === g.cr[i][0] && p.y === g.cr[i][1]);
+const solved = (L, g) => L.pads.every((p) => g.cr.some((c, i) => c[0] === p.x && c[1] === p.y && L.crates[i].heavy === p.heavy));
+
+// ── RUN (HOST) ──────────────────────────────────────────────────────────────────────
+const host = { bots: new Map(), wasHost: false, last: null, key: "", lastBots: 0, botsJson: "", pushes: new Map(), touched: new Map(), hist: [], lastMoveAt: 0, lastSync: 0 };
+/** The run as state has it, or the host's own newer write that hasn't come back yet. `v` only goes up. */
+function game() {
+  const g = shared("game", null);
+  return host.last && isHost() && (!g || host.last.v > g.v) ? host.last : g;
+}
+function writeGame(g) { g = { ...g, v: (game()?.v ?? 0) + 1 }; host.last = g; net.setShared("game", JSON.stringify(g)); return g; }
+const keyOf = (g) => `r${g.id}l${g.lv}t${g.tr}`;
+const startCrates = (lv) => LEVELS[lv].crates.map((c) => [c.x, c.y]);
+function startLevel(g, lv, tr) {
+  host.hist = []; writeHist(`r${g.id}l${lv}t${tr}`);
+  host.lastMoveAt = host.humanAt = performance.now();
+  return writeGame({ ...g, lv, tr, phase: "play", at: Date.now(), endsAt: 0, cr: startCrates(lv), mv: 0, vote: null, un: 0, back: null });
+}
+const newRun = (id) => startLevel({ id, runAt: Date.now(), times: [] }, ATTRACT ? 3 : 0, 0);
+const nextLevel = (lv) => (ATTRACT ? (lv === 3 ? 1 : 3) : lv + 1); // the preview loops the two busiest levels
+function writeHist(key) {
+  let list = host.hist.slice(-CONFIG.history), json = JSON.stringify({ k: key, list });
+  while (json.length > 1900 && list.length) { list = list.slice(1); json = JSON.stringify({ k: key, list }); }
+  host.hist = list; net.setShared("hist", json);
+}
+
+/** A "push" intent: player `from` leans on crate i from cell (px, py), direction d. */
+function applyPush(from, m) {
+  const g = game(); if (!g || g.phase !== "play" || !m) return false;
+  const i = m.i | 0, d = m.d | 0, c = g.cr[i];
+  if (!c || c[0] !== m.x || c[1] !== m.y || d < 0 || d > 3) return false;
+  const k = Math.abs(m.px - m.x) + Math.abs(m.py - m.y); // how far back in the line the pusher stands
+  if (k < 1 || k > 4 || m.px !== m.x - DX[d] * k || m.py !== m.y - DY[d] * k) return false;
+  const now = performance.now();
+  host.pushes.set(from, { i, d, x: m.px, y: m.py, at: now });
+  if (!host.bots.has(from)) { host.touched.set(i, now); host.humanAt = now; }
+  return tryMove(g, i, d, now);
+}
+/** Move crate i one tile in direction d if enough of the line behind it is pushing that way and the tile ahead is free. */
+function tryMove(g, i, d, now) {
+  const L = LEVELS[g.lv], [x, y] = g.cr[i], line = [];
+  for (let k = 1; k <= 4; k++) { // everyone standing in one unbroken line behind the crate, all pushing
+    const cx = x - DX[d] * k, cy = y - DY[d] * k;
+    const hit = [...host.pushes].find(([, p]) => !p.used && p.i === i && p.d === d && p.x === cx && p.y === cy && now - p.at < CONFIG.pushWindow);
+    if (!hit) break;
+    line.push(hit[0]);
+  }
+  if (line.length < (L.crates[i].heavy ? 2 : 1)) return false;
+  const ax = x + DX[d], ay = y + DY[d], all = bodies(g);
+  if (!isFloor(L, ax, ay) || crateAt(g, ax, ay) >= 0 || all.some((b) => b.x === ax && b.y === ay)) return false;
+  host.hist.push({ c: g.cr, p: Object.fromEntries(all.map((b) => [b.id, [b.x, b.y]])) }); // undo step
+  const cr = g.cr.map((c) => c.slice()); cr[i] = [ax, ay];
+  for (const id of line) { // the line steps forward: bots here, players on their own screens
+    const p = host.pushes.get(id); p.x += DX[d]; p.y += DY[d]; p.used = true; // still "leaning", so a helper stays put
+    const b = host.bots.get(id); if (b) stepBot(b, d, now);
+  }
+  writeGame({ ...g, cr, mv: (g.mv || 0) + 1 });
+  writeHist(keyOf(g));
+  host.lastMoveAt = now;
+  return true;
+}
+/** A "vote" intent: start or join an undo/reset vote. It passes once more than half the players agree. */
+function applyVote(from, m) {
+  const g = game(); if (!g || g.phase !== "play" || !m || (m.k !== "undo" && m.k !== "reset")) return;
+  if (m.k === "undo" && !host.hist.length) return;
+  const now = Date.now(), open = g.vote && g.vote.k === m.k && g.vote.endsAt > now;
+  const v = open ? g.vote : { k: m.k, yes: [], endsAt: now + CONFIG.voteMs, by: nameOf(from) };
+  checkVote(writeGame({ ...g, vote: { ...v, yes: [...new Set([...v.yes, from])] } }));
+}
+const votesNeeded = () => Math.floor(humanIds().length / 2) + 1;
+function checkVote(g) {
+  const v = g.vote; if (!v) return;
+  const humans = humanIds(), yes = v.yes.filter((id) => humans.includes(id)).length;
+  if (yes >= votesNeeded()) { if (v.k === "undo") doUndo(g); else startLevel(g, g.lv, g.tr + 1); net.send("fx", { s: v.k }); fx(v.k); }
+  else if (Date.now() > v.endsAt) writeGame({ ...g, vote: null });
+}
+/** Put every crate back one push; bots go back themselves, players read `back` and step back. */
+function doUndo(g) {
+  const step = host.hist.pop(); if (!step) return writeGame({ ...g, vote: null });
+  for (const b of host.bots.values()) { const p = step.p[b.id]; if (p) placeBot(b, p[0], p[1]); }
+  writeGame({ ...g, cr: step.c, vote: null, un: (g.un || 0) + 1, back: step.p, mv: Math.max(0, (g.mv || 0) - 1) });
+  writeHist(keyOf(g));
+}
+function hostTick(dt, now) {
+  if (!host.wasHost) adopt();
+  let g = game();
+  if (!g) g = newRun(1);
+  const L = LEVELS[g.lv], t = Date.now();
+  if (host.key !== keyOf(g)) resetBots(g, L, now);
+  if (now - host.lastSync > 1000) { host.lastSync = now; syncBots(g, L, now); }
+  if (g.phase === "play") {
+    if (g.vote) { checkVote(g); g = game(); }
+    if (g.phase === "play" && solved(L, g)) g = writeGame({ ...g, phase: "clear", endsAt: t + CONFIG.clearFor, vote: null, times: [...(g.times || []), t - g.at] });
+    else if (ATTRACT && now - host.lastMoveAt > 12000) g = startLevel(g, g.lv, g.tr + 1); // the preview never sits stuck
+  } else if (g.phase === "clear" && t > g.endsAt) {
+    const n = nextLevel(g.lv);
+    g = n < LEVELS.length ? startLevel(g, n, 0) : writeGame({ ...g, phase: "done", endsAt: t + CONFIG.doneFor, total: t - g.runAt });
+  } else if (g.phase === "done" && t > g.endsAt) g = newRun(g.id + 1);
+  for (const [id, p] of host.pushes) if (now - p.at > 3000) host.pushes.delete(id);
+  const all = bodies(g);
+  assignHelpers(g, L, all, now);
+  for (const b of host.bots.values()) botTick(b, now, g, L, all);
+  if (now - host.lastBots > 100) {
+    host.lastBots = now;
+    const json = JSON.stringify({ k: host.key, list: botList(host.key) });
+    if (json !== host.botsJson) { host.botsJson = json; net.setShared("bots", json); }
+  }
+}
+/** Become host: take the undo steps and the bots exactly as state has them. */
+function adopt() {
+  host.wasHost = true; host.bots.clear(); host.pushes.clear();
+  const g = game(), hist = shared("hist", { k: "", list: [] });
+  host.hist = g && hist.k === keyOf(g) ? [...(hist.list || [])] : [];
+  const saved = shared("bots", { k: "", list: [] });
+  for (const s of saved.list || []) host.bots.set(s.i, makeBot(s.i, s.n, s.c, s.x, s.y, s.f));
+  host.key = saved.k || "";
+  host.lastMoveAt = host.humanAt = performance.now();
+}
+
+// ── PLANNER ─────────────────────────────────────────────────────────────────────────
+/** Pushes that take crate i onto one of `pads`, starting with the pusher at `from`. Other crates count as walls.
+ *  Steel crates also need a free tile two behind (for the second pusher). Returns [{x, y, d}] or null. */
+function planPush(L, cr, i, from, pads, heavy) {
+  const C = L.cols, N = C * L.rows, others = new Set(cr.filter((_, j) => j !== i).map(([x, y]) => y * C + x));
+  const open = (x, y) => isFloor(L, x, y) && !others.has(y * C + x);
+  const goal = new Set(pads.map((p) => p.y * C + p.x));
+  const reach = (px, py, crate) => { // every tile the pusher can walk to without moving anything
+    const seen = new Uint8Array(N), q = [py * C + px]; seen[q[0]] = 1; let min = q[0];
+    for (let h = 0; h < q.length; h++) {
+      const c = q[h], x = c % C, y = (c - x) / C;
+      for (let d = 0; d < 4; d++) { const nx = x + DX[d], ny = y + DY[d], n = ny * C + nx; if (open(nx, ny) && n !== crate && !seen[n]) { seen[n] = 1; q.push(n); if (n < min) min = n; } }
+    }
+    return { seen, min };
+  };
+  const start = cr[i][1] * C + cr[i][0], r0 = reach(from.x, from.y, start);
+  const visited = new Map([[start * N + r0.min, null]]), q = [{ c: start, px: from.x, py: from.y, r: r0, key: start * N + r0.min }];
+  for (let h = 0; h < q.length && h < 6000; h++) {
+    const s = q[h], x = s.c % C, y = (s.c - x) / C;
+    if (goal.has(s.c)) { const out = []; for (let k = s.key; visited.get(k); k = visited.get(k).from) out.unshift(visited.get(k).push); return out; }
+    for (let d = 0; d < 4; d++) {
+      const bx = x - DX[d], by = y - DY[d], ax = x + DX[d], ay = y + DY[d];
+      if (!open(bx, by) || !s.r.seen[by * C + bx] || !open(ax, ay)) continue;
+      if (heavy && !(open(bx - DX[d], by - DY[d]) && s.r.seen[(by - DY[d]) * C + bx - DX[d]])) continue;
+      const nc = ay * C + ax, r = reach(x, y, nc), key = nc * N + r.min;
+      if (visited.has(key)) continue;
+      visited.set(key, { from: s.key, push: { x, y, d } });
+      q.push({ c: nc, px: x, py: y, r, key });
+    }
+  }
+  return null;
+}
+/** First step (0–3) of a shortest walk from (x, y) to (tx, ty) around walls, crates and `blocked` tiles, or -1. */
+function walkStep(L, g, x, y, tx, ty, blocked) {
+  if (x === tx && y === ty) return -1;
+  const C = L.cols, N = C * L.rows, prev = new Int16Array(N).fill(-1), q = [ty * C + tx];
+  prev[q[0]] = 4; // search back from the goal so the answer is the first step
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h], cx = c % C, cy = (c - cx) / C;
+    for (let d = 0; d < 4; d++) {
+      const nx = cx + DX[d], ny = cy + DY[d], n = ny * C + nx;
+      if (nx === x && ny === y) return (d + 2) % 4;
+      if (!isFloor(L, nx, ny) || prev[n] >= 0 || crateAt(g, nx, ny) >= 0 || blocked.has(n)) continue;
+      prev[n] = d; q.push(n);
+    }
+  }
+  return -1;
+}
+
+// ── BOTS ────────────────────────────────────────────────────────────────────────────
+// A bot works on wood crates by itself (the planner), helps anyone leaning on a steel crate by
+// lining up behind them, and leads steel crates itself, waiting for a hand (bot or player).
+function makeBot(id, name, color, x, y, f) { return { id, name, color, x, y, f: f || 1, ax: x, ay: y, moveAt: 0, busyUntil: 0, job: null, helping: null, waitAt: 0 }; }
+function botList(key) {
+  if (isHost()) return host.key !== key ? [] : [...host.bots.values()].map((b) => ({ i: b.id, n: b.name, c: b.color, x: b.x, y: b.y, f: b.f, w: b.job && b.job.wait && !b.job.helped ? 1 : 0 }));
+  const saved = shared("bots", { k: "", list: [] });
+  return saved.k === key ? saved.list || [] : [];
+}
+function syncBots(g, L, now) {
+  const want = Math.max(0, CONFIG.seats - humanIds().length);
+  while (host.bots.size > want) host.bots.delete([...host.bots.keys()].pop());
+  while (host.bots.size < want) {
+    const used = new Set([...host.bots.values()].map((b) => b.name)), taken = new Set([...takenColors(), myColor, ...[...host.bots.values()].map((b) => b.color)]);
+    const id = "~b" + Math.random().toString(36).slice(2, 6), at = freeSpawn(g, L);
+    host.bots.set(id, makeBot(id, BOT_NAMES.find((n) => !used.has(n)) || "Bot", COLORS.find((c) => !taken.has(c)) || "#ccc", at.x, at.y));
+  }
+}
+function freeSpawn(g, L) { const all = bodies(g); const s = L.spawns.find((s) => !all.some((b) => b.x === s.x && b.y === s.y)) || L.spawns[0]; return freeNear(L, g, s.x, s.y, all); }
+/** The nearest floor tile to (x, y) with no crate and nobody on it. */
+function freeNear(L, g, x, y, all) {
+  const seen = new Set([y * L.cols + x]), q = [[x, y]];
+  for (let h = 0; h < q.length; h++) {
+    const [cx, cy] = q[h];
+    if (crateAt(g, cx, cy) < 0 && !all.some((b) => !b.mine && b.x === cx && b.y === cy)) return { x: cx, y: cy };
+    for (let d = 0; d < 4; d++) { const nx = cx + DX[d], ny = cy + DY[d]; if (isFloor(L, nx, ny) && !seen.has(ny * L.cols + nx)) { seen.add(ny * L.cols + nx); q.push([nx, ny]); } }
+  }
+  return { x, y };
+}
+function resetBots(g, L, now) {
+  host.key = keyOf(g); syncBots(g, L, now);
+  const humans = humanIds().length; let n = humans;
+  for (const b of host.bots.values()) { const s = L.spawns[n++ % L.spawns.length]; placeBot(b, s.x, s.y); b.job = null; b.helping = null; b.busyUntil = now + CONFIG.botStartMs + rnd(...CONFIG.botThinkMs); }
+}
+const rnd = (a, b) => a + Math.random() * (b - a);
+function placeBot(b, x, y) { Object.assign(b, { x, y, ax: x, ay: y, moveAt: 0 }); }
+function stepBot(b, d, now) { b.ax = b.x; b.ay = b.y; b.x += DX[d]; b.y += DY[d]; b.f = d; b.moveAt = now; b.busyUntil = Math.max(b.busyUntil, now + CONFIG.botStepMs); }
+/** Someone leaning on a steel crate with nobody behind them gets the nearest free bot as a helper (players first). */
+function assignHelpers(g, L, all, now) {
+  const leads = [], bots = [...host.bots.values()];
+  for (const [id, p] of host.pushes) {
+    const c = g.cr[p.i], hx = p.x - DX[p.d], hy = p.y - DY[p.d];
+    if (!host.bots.has(id) && L.crates[p.i].heavy && now - p.at < 1800 && c[0] === p.x + DX[p.d] && c[1] === p.y + DY[p.d] && isFloor(L, hx, hy) && crateAt(g, hx, hy) < 0) leads.push({ id, i: p.i, d: p.d, x: p.x, y: p.y, human: true });
+  }
+  for (const b of bots) if (b.job && b.job.wait) {
+    leads.push({ id: b.id, i: b.job.i, d: b.job.wait.d, x: b.x, y: b.y });
+    b.job.helped = all.some((o) => o.x === b.x - DX[b.job.wait.d] && o.y === b.y - DY[b.job.wait.d]); // someone is behind me: stop asking
+  }
+  for (const b of bots) if (b.helping && !leads.some((l) => l.id === b.helping.id)) b.helping = null; // they stopped
+  for (const l of leads) {
+    if (!l.human && !(host.bots.get(l.id)?.job?.wait)) continue; // that bot was just called to help someone else
+    const mine = bots.find((o) => o.helping && o.helping.id === l.id);
+    if (mine) { mine.helping = l; continue; }
+    if (all.some((o) => o.x === l.x - DX[l.d] && o.y === l.y - DY[l.d])) continue; // someone is already behind them
+    // a player gets any bot; a waiting bot gets a free one, or another waiting bot with a higher id (so two never wait on each other)
+    const free = bots.filter((b) => b.id !== l.id && !b.helping && (l.human || !(b.job && b.job.wait) || b.id > l.id)).sort((a, c) => dist(a, l) - dist(c, l))[0];
+    if (free) { free.helping = l; free.job = null; }
+  }
+}
+const dist = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+/** Pick a crate to work on: the cheapest wood crate with a way onto a free pad, else a steel one to lead.
+ *  A move that would leave another crate with no way onto any pad is skipped (fill the back of a bay first). */
+function pickJob(b, g, L, now, shuffle) {
+  const busy = [...host.bots.values()].filter((o) => o !== b && o.job), claimedC = new Set(busy.map((o) => o.job.i)), claimedP = new Set(busy.map((o) => o.job.pad));
+  const stuck = (heavy) => { // crates of this kind still need a pad, and not one of them has a way onto a free pad
+    const free = L.pads.filter((p) => p.heavy === heavy && crateAt(g, p.x, p.y) < 0), loose = g.cr.map((_, j) => j).filter((j) => L.crates[j].heavy === heavy && !onPad(L, g, j));
+    return loose.length > 0 && loose.every((j) => !planPush(L, g.cr, j, b, free, heavy));
+  };
+  const free = (i) => !claimedC.has(i) && now - (host.touched.get(i) || -1e9) > 5000; // not one a player is pushing
+  const todo = (i) => free(i) && (shuffle ? onPad(L, g, i) && stuck(L.crates[i].heavy) : !onPad(L, g, i));
+  const woodLeft = g.cr.filter((_, i) => free(i) && !onPad(L, g, i) && !L.crates[i].heavy).length;
+  const leave = ATTRACT || shuffle || now - host.humanAt > CONFIG.leaveForYou ? 0 : humanIds().length; // wood crates left for the players
+  const options = [];
+  for (let i = 0; i < g.cr.length; i++) {
+    const heavy = L.crates[i].heavy;
+    if (!todo(i) || (!heavy && woodLeft <= leave)) continue;
+    L.pads.forEach((p, k) => {
+      if (p.heavy !== heavy || claimedP.has(k) || crateAt(g, p.x, p.y) >= 0) return;
+      const plan = planPush(L, g.cr, i, b, [p], heavy);
+      if (plan) options.push({ i, plan, k: 0, pad: k, cost: plan.length + dist(b, plan[0]) + (heavy ? 25 : 0) });
+    });
+  }
+  options.sort((a, c) => a.cost - c.cost);
+  const pick = options.find((o) => leavesAWay(g, L, o, b)) || options[0];
+  if (pick) return pick;
+  return shuffle ? null : pickJob(b, g, L, now, true); // stuck: try moving a crate from a front pad to a free one further in
+}
+/** After this job, can every other loose crate still reach a free pad of its kind? */
+function leavesAWay(g, L, job, from) {
+  const cr = g.cr.map((c, i) => (i === job.i ? [L.pads[job.pad].x, L.pads[job.pad].y] : c)), after = { ...g, cr };
+  return cr.every((_, j) => j === job.i || onPad(L, after, j) ||
+    !!planPush(L, cr, j, from, L.pads.filter((p) => p.heavy === L.crates[j].heavy && crateAt(after, p.x, p.y) < 0), L.crates[j].heavy));
+}
+/** Where this bot wants to stand next, and which way to push once it is there. */
+function botGoal(b, g, L, now) {
+  if (b.helping) { const l = b.helping; return { x: l.x - DX[l.d], y: l.y - DY[l.d], push: l.d, crate: l.i }; }
+  if (b.job) { // follow the plan; if the crate isn't where the plan says, plan again
+    const c = g.cr[b.job.i];
+    while (b.job.k < b.job.plan.length && !(c[0] === b.job.plan[b.job.k].x && c[1] === b.job.plan[b.job.k].y)) b.job.k++;
+    const pad = L.pads[b.job.pad], there = c[0] === pad.x && c[1] === pad.y; // its own pad: a front pad on the way doesn't count
+    if (b.job.k >= b.job.plan.length || there) { b.job = null; b.busyUntil = now + rnd(...CONFIG.botThinkMs); return null; }
+    const s = b.job.plan[b.job.k], at = { x: s.x - DX[s.d], y: s.y - DY[s.d] };
+    b.job.wait = L.crates[b.job.i].heavy && b.x === at.x && b.y === at.y ? { d: s.d } : null;
+    b.job.waitSince = b.job.wait ? b.job.waitSince || now : 0;
+    if (b.job.wait && now - b.job.waitSince > 12000) { b.job = null; b.waitAt = now + 5000; return null; } // nobody came: try something else
+    return { ...at, push: s.d, crate: b.job.i };
+  }
+  if (now > b.waitAt) { b.job = pickJob(b, g, L, now); b.waitAt = now + 1500; }
+  return null;
+}
+function botTick(b, now, g, L, all) {
+  if (g.phase !== "play" || now < b.busyUntil) return;
+  const others = new Set(all.filter((o) => o.id !== b.id).map((o) => o.y * L.cols + o.x));
+  const block = inTheWay(b, g, all, now);
+  if (block >= 0 && stepAside(b, g, L, others, block, now)) return;
+  const goal = botGoal(b, g, L, now);
+  if (!goal) return;
+  if (b.x === goal.x && b.y === goal.y) { // in place: lean on the crate (the host checks the line like anyone else's)
+    b.f = goal.push;
+    const c = g.cr[goal.crate], k = Math.abs(c[0] - b.x) + Math.abs(c[1] - b.y);
+    if (c[0] === b.x + DX[goal.push] * k && c[1] === b.y + DY[goal.push] * k) applyPush(b.id, { i: goal.crate, x: c[0], y: c[1], d: goal.push, px: b.x, py: b.y });
+    b.busyUntil = now + 200;
+    return;
+  }
+  let d = walkStep(L, g, b.x, b.y, goal.x, goal.y, others);
+  if (d < 0) d = walkStep(L, g, b.x, b.y, goal.x, goal.y, new Set()); // only people in the way: wait for them
+  const nx = b.x + DX[d], ny = b.y + DY[d];
+  if (d < 0 || others.has(ny * L.cols + nx)) { b.busyUntil = now + 250; if (Math.random() < 0.15) b.job = null; return; }
+  stepBot(b, d, now);
+}
+/** Is this bot standing where someone is pushing a crate, or (idle) right in front of a player? Returns their direction or -1. */
+function inTheWay(b, g, all, now) {
+  for (const [id, p] of host.pushes) { const c = g.cr[p.i]; if (id !== b.id && now - p.at < 1000 && c[0] + DX[p.d] === b.x && c[1] + DY[p.d] === b.y) return p.d; }
+  if (b.job || b.helping) return -1;
+  const p = all.find((o) => !o.bot && o.f !== undefined && o.x + DX[o.f] === b.x && o.y + DY[o.f] === b.y);
+  return p ? p.f : -1;
+}
+/** Step off someone's path: sideways if possible. */
+function stepAside(b, g, L, others, from, now) {
+  const free = (d) => isFloor(L, b.x + DX[d], b.y + DY[d]) && crateAt(g, b.x + DX[d], b.y + DY[d]) < 0 && !others.has((b.y + DY[d]) * L.cols + b.x + DX[d]);
+  const d = [(from + 1) % 4, (from + 3) % 4, from].find(free);
+  if (d === undefined) return false;
+  stepBot(b, d, now); return true;
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() ||
+  ["Brave", "Clever", "Steady", "Happy", "Quick", "Lucky"][Math.floor(Math.random() * 6)] + " " + ["Mover", "Packer", "Loader", "Porter", "Hauler"][Math.floor(Math.random() * 5)];
+let myColor = COLORS[0]; // picked on join: the first color nobody in the room has
+const me = { x: 1, y: 1, f: 1, ax: 1, ay: 1, moveAt: 0, nextAt: 0, key: "", un: 0, pend: null, lastPush: 0, sent: "", fromStart: false, submitted: -1, steelTip: 0 };
+const held = []; // directions held down, newest last
+
+/** Everyone standing in this level: [{ id, x, y, f, bot, mine }]. Players from their own reports, bots from the host. */
+function bodies(g) {
+  const out = [], key = keyOf(g);
+  for (const id of livePlayers()) {
+    if (id === net.sessionId) { if (me.key === key && !ATTRACT) out.push({ id, x: me.x, y: me.y, f: me.f, mine: true }); continue; }
+    const s = posOf(id); if (s && s.k === key) out.push({ id, x: s.x, y: s.y, f: s.f });
+  }
+  for (const b of botList(key)) out.push({ id: b.i, x: b.x, y: b.y, f: b.f, bot: true });
+  return out;
+}
+const posCache = new Map();
+function posOf(id) { const raw = S.entities.players[id]?.p, c = posCache.get(id); if (c && c.raw === raw) return c.v; const v = parse(raw, null); posCache.set(id, { raw, v }); return v; }
+function publish() { const s = JSON.stringify({ x: me.x, y: me.y, f: me.f, k: me.key }); if (s !== me.sent) { me.sent = s; net.me.set("p", s); } }
+function place(x, y) { Object.assign(me, { x, y, ax: x, ay: y, moveAt: 0 }); }
+function stepMe(d, now) { me.ax = me.x; me.ay = me.y; me.x += DX[d]; me.y += DY[d]; me.f = d; me.moveAt = now; me.nextAt = now + CONFIG.stepMs; publish(); }
+
+function myTick(now, g, L) {
+  if (me.key !== keyOf(g)) { // new level or a reset: to my spawn (players take the first spawns in sessionId order)
+    if (g.lv === (ATTRACT ? 3 : 0) && g.tr === 0 && g.phase === "play" && Date.now() - g.runAt < 8000) me.fromStart = true;
+    const s0 = L.spawns[Math.max(0, livePlayers().indexOf(net.sessionId)) % L.spawns.length], s = g.tr || g.mv ? freeNear(L, g, s0.x, s0.y, bodies(g)) : s0;
+    place(s.x, s.y); me.key = keyOf(g); me.un = g.un || 0; me.pend = null; $("over").hidden = true;
+    if (!ATTRACT) toast(g.tr ? "Level reset" : `Level ${g.lv + 1}: ${L.name}`, 1600);
+    publish();
+  }
+  if ((g.un || 0) !== me.un) { me.un = g.un || 0; const p = g.back && g.back[net.sessionId]; if (p) place(p[0], p[1]); me.pend = null; publish(); }
+  if (me.pend) { // leaning on a crate: when it moves, step after it
+    const c = g.cr[me.pend.i], d = me.pend.d;
+    if (c && c[0] === me.pend.x + DX[d] && c[1] === me.pend.y + DY[d]) { me.pend = null; stepMe(d, now); thud(); }
+    else if (now > me.pend.until) {
+      if (L.crates[me.pend.i].heavy && now - me.steelTip > 6000) { me.steelTip = now; hintNow("Steel needs two: someone has to stand right behind you and push too."); }
+      me.pend = null;
+    }
+  }
+  if (g.phase !== "play" || ATTRACT) return;
+  const d = held.length ? held[held.length - 1] : -1;
+  if (d < 0 || now < me.nextAt) return;
+  me.f = d;
+  const tx = me.x + DX[d], ty = me.y + DY[d], all = bodies(g).filter((b) => !b.mine);
+  if (!isFloor(L, tx, ty)) { publish(); return; }
+  let k = 1; // look along the line: other players, then maybe a crate
+  while (all.some((b) => b.x === me.x + DX[d] * k && b.y === me.y + DY[d] * k) && k < 5) k++;
+  const cx = me.x + DX[d] * k, cy = me.y + DY[d] * k, i = crateAt(g, cx, cy);
+  if (i >= 0) { // lean on it and ask the host to move it
+    if (now - me.lastPush < CONFIG.pushRepeatMs) return;
+    me.lastPush = now; me.pend = { i, x: cx, y: cy, d, until: now + CONFIG.pushWaitMs };
+    const msg = { i, x: cx, y: cy, d, px: me.x, py: me.y };
+    publish();
+    if (isHost()) applyPush(net.sessionId, msg); else net.send("push", msg);
+    return;
+  }
+  if (k > 1) { publish(); return; } // a player in the way
+  stepMe(d, now);
+}
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+function fit() { DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; }
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+const view = { T: 32, ox: 0, oy: 0 };
+function layout(L) {
+  const wide = W > H, top = ATTRACT ? 8 : 64, bottom = ATTRACT ? 8 : touchUI && !wide ? 230 : 56, side = touchUI && wide ? 200 : 12;
+  view.T = Math.floor(Math.min((W - side * 2) / L.cols, (H - top - bottom) / (L.rows + 0.3)));
+  if (ATTRACT) view.T = Math.min(W / (L.cols - 0.6), H / (L.rows - 0.4));
+  view.ox = (W - L.cols * view.T) / 2;
+  view.oy = top + (H - top - bottom - (L.rows + 0.3) * view.T) / 2 + view.T * 0.3;
+}
+const sx = (x) => view.ox + x * view.T, sy = (y) => view.oy + y * view.T;
+const views = new Map(); // id -> { x, y } everyone but me, eased toward their reported tile
+const crateViews = [];   // crate i -> { x, y } eased toward its tile in state
+const sparks = [];
+function puff(x, y, color, n, speed = 3) { for (let i = 0; i < n; i++) sparks.push({ x, y, vx: (Math.random() - 0.5) * speed, vy: (Math.random() - 0.5) * speed, life: 0.5 + Math.random() * 0.4, color, s: 0.06 + Math.random() * 0.08 }); }
+/** Glide v toward (tx, ty) at walking speed; jump if it's far (a reset or an undo). */
+function glide(v, tx, ty, dt, speed) {
+  const dx = tx - v.x, dy = ty - v.y, d = Math.hypot(dx, dy);
+  if (d > 2.5) { v.x = tx; v.y = ty; return; }
+  const step = Math.min(d, speed * dt); if (d > 0) { v.x += (dx / d) * step; v.y += (dy / d) * step; }
+}
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function drawLevel(L, g, t) {
+  const T = view.T;
+  for (let y = 0; y < L.rows; y++) for (let x = 0; x < L.cols; x++) { // floor: warm boards in a soft checker
+    if (!isFloor(L, x, y)) continue;
+    ctx.fillStyle = (x + y) % 2 ? "#3b3352" : "#40385a"; ctx.fillRect(sx(x), sy(y), T + 0.5, T + 0.5);
+  }
+  for (const p of L.pads) { // pads glow brighter when the right crate sits on them
+    const i = crateAt(g, p.x, p.y), full = i >= 0 && L.crates[i].heavy === p.heavy, col = p.heavy ? "#5ad1ff" : "#ffb347", cx = sx(p.x + 0.5), cy = sy(p.y + 0.5);
+    ctx.shadowColor = col; ctx.shadowBlur = full ? 22 : 8 + Math.sin(t * 3 + p.x) * 4;
+    ctx.strokeStyle = col; ctx.lineWidth = T * 0.08;
+    if (p.heavy) { rr(cx - T * 0.36, cy - T * 0.36, T * 0.72, T * 0.72, T * 0.1); ctx.stroke(); ctx.fillStyle = col + "33"; ctx.fill(); }
+    else { ctx.beginPath(); ctx.arc(cx, cy, T * 0.33, 0, 7); ctx.stroke(); ctx.fillStyle = col + "33"; ctx.fill(); }
+    ctx.shadowBlur = 0;
+  }
+  for (let y = 0; y < L.rows; y++) for (let x = 0; x < L.cols; x++) { // a soft shadow under each wall
+    if (isFloor(L, x, y) && isWall(L, x, y - 1)) { const sh = ctx.createLinearGradient(0, sy(y), 0, sy(y + 0.35)); sh.addColorStop(0, "#0000004d"); sh.addColorStop(1, "#00000000"); ctx.fillStyle = sh; ctx.fillRect(sx(x), sy(y), T + 0.5, T * 0.35); }
+  }
+  for (let y = 0; y < L.rows; y++) for (let x = 0; x < L.cols; x++) { // walls: raised blocks, lit along the top, a darker face where they meet the floor
+    if (!isWall(L, x, y)) continue;
+    ctx.fillStyle = "#6a5c94"; ctx.fillRect(sx(x), sy(y), T + 0.5, T + 0.5);
+    if (!isWall(L, x, y - 1)) { ctx.fillStyle = "#8a7bbd"; ctx.fillRect(sx(x), sy(y), T + 0.5, T * 0.1); }
+    if (!isWall(L, x, y + 1)) { ctx.fillStyle = "#463b68"; ctx.fillRect(sx(x), sy(y + 0.72), T + 0.5, T * 0.28 + 0.5); }
+    if ((x * 7 + y * 3) % 5 === 0) { ctx.fillStyle = "#ffffff0d"; ctx.fillRect(sx(x + 0.2), sy(y + 0.25), T * 0.3, T * 0.08); } // a little texture
+  }
+}
+function drawCrate(L, g, i, v, t) {
+  const T = view.T, heavy = L.crates[i].heavy, done = onPad(L, g, i), x = sx(v.x), y = sy(v.y), m = T * 0.07, s = T - m * 2;
+  ctx.fillStyle = "#0006"; rr(x + m + T * 0.04, y + m + T * 0.1, s, s, T * 0.12); ctx.fill();
+  if (heavy) {
+    ctx.fillStyle = done ? "#a9e8ff" : "#8fa3b8"; rr(x + m, y + m - T * 0.06, s, s, T * 0.12); ctx.fill();
+    ctx.strokeStyle = done ? "#2f9fd0" : "#56677a"; ctx.lineWidth = T * 0.07; rr(x + m * 2, y + m * 2 - T * 0.06, s - m * 2, s - m * 2, T * 0.08); ctx.stroke();
+    ctx.fillStyle = "#56677a"; for (const [a, b] of [[0.24, 0.18], [0.76, 0.18], [0.24, 0.7], [0.76, 0.7]]) { ctx.beginPath(); ctx.arc(x + T * a, y + T * b, T * 0.045, 0, 7); ctx.fill(); }
+    ctx.fillStyle = done ? "#ffffff" : "#33404f"; ctx.font = `900 ${Math.round(T * 0.36)}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("×2", x + T / 2, y + T * 0.44);
+  } else {
+    ctx.fillStyle = done ? "#ffd36b" : "#c8823c"; rr(x + m, y + m - T * 0.06, s, s, T * 0.12); ctx.fill();
+    ctx.strokeStyle = done ? "#b8741c" : "#8a5223"; ctx.lineWidth = T * 0.07;
+    rr(x + m * 2, y + m * 2 - T * 0.06, s - m * 2, s - m * 2, T * 0.06); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + m * 2.4, y + m * 2.4 - T * 0.06); ctx.lineTo(x + T - m * 2.4, y + T - m * 2.4 - T * 0.06); ctx.stroke();
+  }
+  if (done) { ctx.globalAlpha = 0.25 + 0.15 * Math.sin(t * 4 + i); ctx.fillStyle = "#fff"; rr(x + m, y + m - T * 0.06, s, s, T * 0.12); ctx.fill(); ctx.globalAlpha = 1; }
+}
+function drawBody(b, t) {
+  const T = view.T, x = sx(b.x + 0.5) + (b.lean ? DX[b.f] * T * 0.12 : 0), y = sy(b.y + 0.5) + (b.lean ? DY[b.f] * T * 0.12 : 0);
+  const r = T * 0.36, bob = Math.sin(t * 12 + b.x * 3 + b.y) * (b.walking ? T * 0.03 : 0);
+  ctx.fillStyle = "#0005"; ctx.beginPath(); ctx.ellipse(x, y + r * 0.85, r * 0.9, r * 0.3, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = b.color; ctx.beginPath(); ctx.arc(x, y - bob, r, 0, 7); ctx.fill();
+  ctx.fillStyle = "#ffffff33"; ctx.beginPath(); ctx.arc(x - r * 0.3, y - bob - r * 0.35, r * 0.35, 0, 7); ctx.fill();
+  const fx = DX[b.f] || 0, fy = DY[b.f] || 0;
+  for (const s of [-1, 1]) { // eyes look where you're going
+    const ex = x + fx * r * 0.35 + (fy ? s * r * 0.32 : 0), ey = y - bob + fy * r * 0.3 + (fx ? s * r * 0.3 : 0) - (fy ? 0 : r * 0.1);
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ex, ey, r * 0.22, 0, 7); ctx.fill();
+    ctx.fillStyle = "#1b1f3b"; ctx.beginPath(); ctx.arc(ex + fx * r * 0.09, ey + fy * r * 0.09, r * 0.11, 0, 7); ctx.fill();
+  }
+  if (b.bot) { ctx.strokeStyle = b.color; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, y - bob - r); ctx.lineTo(x, y - bob - r - T * 0.18); ctx.stroke(); ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.arc(x, y - bob - r - T * 0.2, T * 0.06, 0, 7); ctx.fill(); }
+  if (b.wait) { // a bot leading a steel crate asks for a hand
+    ctx.font = `800 ${Math.max(11, Math.round(T * 0.3))}px system-ui`; ctx.textAlign = "center"; const w = ctx.measureText("Push with me!").width + 12;
+    ctx.fillStyle = "#ffffffee"; rr(x - w / 2, y - r - T * 0.95, w, T * 0.42, 8); ctx.fill(); ctx.fillStyle = "#2a1600"; ctx.textBaseline = "middle"; ctx.fillText("Push with me!", x, y - r - T * 0.74);
+  } else if (!ATTRACT && b.name) {
+    ctx.font = `700 ${Math.max(11, Math.round(T * 0.3))}px system-ui`; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = b.mine ? "#ffd23f" : "#ffffffcc"; ctx.fillText(b.mine ? "You" : String(b.name).split(" ")[0], x, y - r - T * 0.24); // first word only: neighbours' labels stay apart
+  }
+}
+let lastCrates = "";
+function draw(g, L, dt, t, now) {
+  layout(L);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const grd = ctx.createLinearGradient(0, 0, 0, H); grd.addColorStop(0, "#1d1932"); grd.addColorStop(1, "#2b2140"); ctx.fillStyle = grd; ctx.fillRect(0, 0, W, H);
+  drawLevel(L, g, t);
+  const key = JSON.stringify(g.cr);
+  if (key !== lastCrates) { // a crate moved: dust behind it, a burst if it landed on its pad
+    const before = parse(lastCrates, []);
+    g.cr.forEach((c, i) => { const o = before[i]; if (o && (o[0] !== c[0] || o[1] !== c[1])) { puff(o[0] + 0.5, o[1] + 0.5, "#d9c7a6", 6); if (onPad(L, g, i) && before.length === g.cr.length) { puff(c[0] + 0.5, c[1] + 0.5, L.crates[i].heavy ? "#5ad1ff" : "#ffd36b", 22, 7); chime(); } } });
+    lastCrates = key;
+  }
+  for (const b of botList(keyOf(g))) if (b.w) { // where a waiting bot wants its helper
+    const d = b.f, hx = b.x - DX[d], hy = b.y - DY[d]; ctx.strokeStyle = "#ffffffaa"; ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
+    rr(sx(hx) + view.T * 0.15, sy(hy) + view.T * 0.15, view.T * 0.7, view.T * 0.7, view.T * 0.2); ctx.stroke(); ctx.setLineDash([]);
+  }
+  const list = [];
+  for (let i = 0; i < g.cr.length; i++) {
+    let v = crateViews[i]; if (!v) v = crateViews[i] = { x: g.cr[i][0], y: g.cr[i][1] };
+    glide(v, g.cr[i][0], g.cr[i][1], dt, 1000 / CONFIG.stepMs * 1.1);
+    list.push({ y: v.y, draw: () => drawCrate(L, g, i, v, t) });
+  }
+  crateViews.length = g.cr.length;
+  for (const [id, v] of views) list.push({ y: v.y, draw: () => drawBody(v, t) });
+  if (!ATTRACT && me.key === keyOf(g)) { const k = Math.min(1, (now - me.moveAt) / CONFIG.stepMs), e = 1 - (1 - k) * (1 - k);
+    const mv = { x: me.ax + (me.x - me.ax) * e, y: me.ay + (me.y - me.ay) * e, f: me.f, color: myColor, name: myName, mine: true, lean: !!me.pend, walking: k < 1 };
+    list.push({ y: mv.y, draw: () => drawBody(mv, t) }); }
+  list.sort((a, b) => a.y - b.y).forEach((o) => o.draw());
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const s = sparks[i]; s.life -= dt; if (!s.float) s.vy += 4 * dt; s.x += s.vx * dt; s.y += s.vy * dt;
+    if (s.life <= 0) { sparks.splice(i, 1); continue; }
+    ctx.globalAlpha = Math.min(1, s.life * 2); ctx.fillStyle = s.color; ctx.fillRect(sx(s.x) - (s.s * view.T) / 2, sy(s.y) - (s.s * view.T) / 2, s.s * view.T, s.s * view.T); ctx.globalAlpha = 1;
+  }
+}
+/** Everyone else's eased position: players from their reports, bots from the host's own moves or its snapshot. */
+function updateViews(g, dt, now) {
+  const seen = new Set(), key = keyOf(g), speed = 1000 / CONFIG.stepMs * 1.15;
+  for (const id of livePlayers()) {
+    if (id === net.sessionId) continue;
+    const s = posOf(id), p = S.entities.players[id]; if (!s || s.k !== key) continue;
+    seen.add(id); let v = views.get(id); if (!v) { v = { x: s.x, y: s.y }; views.set(id, v); }
+    glide(v, s.x, s.y, dt, speed); Object.assign(v, { f: s.f, name: p.n || "Player", color: p.c || "#ccc", walking: Math.hypot(v.x - s.x, v.y - s.y) > 0.02 });
+  }
+  if (isHost()) for (const b of host.bots.values()) { // the host draws its own bots from the live simulation
+    seen.add(b.id); const k = Math.min(1, (now - b.moveAt) / CONFIG.botStepMs), e = 1 - (1 - k) * (1 - k);
+    views.set(b.id, { x: b.ax + (b.x - b.ax) * e, y: b.ay + (b.y - b.ay) * e, f: b.f, name: b.name, color: b.color, bot: true, walking: k < 1, wait: !!(b.job && b.job.wait && !b.job.helped) });
+  } else for (const b of botList(key)) {
+    seen.add(b.i); let v = views.get(b.i); if (!v || !v.bot) { v = { x: b.x, y: b.y, bot: true }; views.set(b.i, v); }
+    glide(v, b.x, b.y, dt, 1000 / CONFIG.botStepMs * 1.2); Object.assign(v, { f: b.f, name: b.n, color: b.c, wait: !!b.w, walking: Math.hypot(v.x - b.x, v.y - b.y) > 0.02 });
+  }
+  for (const id of views.keys()) if (!seen.has(id)) views.delete(id);
+}
+
+// ── HUD & DONE ──────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmt = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor((ms % 60000) / 1000)).padStart(2, "0")}`;
+const nameOf = (id) => (id === net.sessionId ? myName : S.entities.players[id]?.n || "Someone");
+let toastTimer = 0, board = null, hintUntil = 0;
+function toast(text, ms = 1600) { const m = $("msg"); m.textContent = text; m.classList.add("on"); clearTimeout(toastTimer); toastTimer = setTimeout(() => m.classList.remove("on"), ms); }
+function hintNow(text) { $("hint").textContent = text; hintUntil = performance.now() + 5000; }
+function hud(g, L, now) {
+  if (ATTRACT) { for (const id of ["lvl", "hint", "net", "vote"]) $(id).textContent = ""; return; }
+  const t = Date.now(), placed = g.cr.filter((_, i) => onPad(L, g, i)).length;
+  $("lvl").innerHTML = `Level ${g.lv + 1}/${LEVELS.length} · ${esc(L.name)} <small>${fmt(Math.max(0, (g.phase === "done" ? g.runAt + g.total : t) - g.runAt))} · ${placed}/${L.pads.length} on pads · ${g.mv || 0} pushes</small>`;
+  if (now > hintUntil) $("hint").textContent = g.phase === "play" && t - g.at < 14000 && !g.tr ? L.hint : "";
+  const v = g.vote, n = livePlayers().length;
+  if (v && v.endsAt > t && g.phase === "play") {
+    const yes = v.yes.filter((id) => livePlayers().includes(id)).length, mine = v.yes.includes(net.sessionId);
+    $("vote").textContent = `${v.by === myName && mine ? "You want" : esc(v.by) + " wants"} to ${v.k === "undo" ? "undo the last push" : "reset the level"} · ${yes}/${votesNeeded()} · ${mine ? "waiting for the others" : `tap ${v.k === "undo" ? "Undo" : "Reset"} to agree`} · ${Math.ceil((v.endsAt - t) / 1000)}s`;
+  } else $("vote").textContent = "";
+  $("undo").classList.toggle("on", !!(v && v.k === "undo" && v.endsAt > t)); $("reset").classList.toggle("on", !!(v && v.k === "reset" && v.endsAt > t));
+  $("net").textContent = net.offline ? "Offline: playing with bots" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the warehouse" : ""}`;
+  $("over").hidden = g.phase !== "done";
+  if (g.phase === "done" && !$("over").dataset.shown) { $("over").dataset.shown = "1"; showDone(g); }
+  if (g.phase !== "done") delete $("over").dataset.shown;
+}
+function showDone(g) {
+  $("doneTime").textContent = `All ${LEVELS.length} levels in ${fmt(g.total)}`;
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  const submit = me.fromStart && me.submitted !== g.id ? board.submit(Math.max(0, 3600000 - g.total)).catch(() => null) : Promise.resolve();
+  me.submitted = g.id; list.innerHTML = "<li>Loading…</li>";
+  submit.then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${fmt(3600000 - e.score)}</span></li>`).join("") : "<li>No runs yet. Set the first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("again").onclick = () => { const g = game(); if (!g || g.phase !== "done") return; if (isHost()) newRun(g.id + 1); else net.send("again", {}); };
+function vote(k) { wake(); const g = game(); if (!g || g.phase !== "play" || ATTRACT) return; if (isHost()) applyVote(net.sessionId, { k }); else net.send("vote", { k }); blip(); }
+$("undo").onclick = () => vote("undo");
+$("reset").onclick = () => vote("reset");
+let actx = null;
+function beep(freq, dur, type = "sine", vol = 0.1, slide = 1) {
+  if (!actx) return;
+  const o = actx.createOscillator(), gn = actx.createGain(), t = actx.currentTime; o.type = type; o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq * slide, t + dur);
+  gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(gn).connect(actx.destination); o.start(); o.stop(t + dur);
+}
+const thud = () => beep(110, 0.12, "square", 0.05, 0.6), chime = () => { beep(660, 0.15, "triangle", 0.08, 1.5); setTimeout(() => beep(990, 0.2, "triangle", 0.07), 90); }, blip = () => beep(520, 0.08, "triangle", 0.06);
+function fx(kind) { if (kind === "undo" || kind === "reset") { toast(kind === "undo" ? "Undo!" : "Reset!", 900); beep(kind === "undo" ? 440 : 330, 0.2, "triangle", 0.07, 0.7); } }
+const takenColors = () => new Set([...livePlayers().filter((id) => id !== net.sessionId).map((id) => S.entities.players[id]?.c), ...(shared("bots", {}).list || []).map((b) => b.c)]);
+/** Two players picked the same color at once (the joiner's first state can be empty): the later sessionId picks again. */
+function fixColor() {
+  const others = livePlayers().filter((id) => id !== net.sessionId), botColors = (isHost() ? [...host.bots.values()].map((b) => b.color) : (shared("bots", {}).list || []).map((b) => b.c));
+  if (!others.some((id) => S.entities.players[id]?.c === myColor && id < net.sessionId) && !botColors.includes(myColor)) return;
+  const taken = new Set([...others.map((id) => S.entities.players[id]?.c), ...botColors]), free = COLORS.find((c) => !taken.has(c));
+  if (free) { myColor = free; net.me.set("c", free); }
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+document.body.classList.toggle("touch", touchUI);
+$("pad").hidden = !touchUI;
+if (ATTRACT) $("tools").hidden = true;
+const wake = () => { if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch {} } };
+const hold = (d) => { const i = held.indexOf(d); if (i >= 0) held.splice(i, 1); held.push(d); };
+const release = (d) => { const i = held.indexOf(d); if (i >= 0) held.splice(i, 1); };
+const KEYS = { ArrowUp: 0, w: 0, W: 0, ArrowRight: 1, d: 1, D: 1, ArrowDown: 2, s: 2, S: 2, ArrowLeft: 3, a: 3, A: 3 };
+addEventListener("keydown", (e) => {
+  wake(); const d = KEYS[e.key];
+  if (d !== undefined) { e.preventDefault(); if (!e.repeat) { hold(d); me.nextAt = Math.min(me.nextAt, performance.now() + 30); } }
+  if ((e.key === "z" || e.key === "Z" || e.key === "u") && !e.repeat) vote("undo");
+  if ((e.key === "r" || e.key === "R") && !e.repeat) vote("reset");
+});
+addEventListener("keyup", (e) => { const d = KEYS[e.key]; if (d !== undefined) release(d); });
+addEventListener("blur", () => { held.length = 0; });
+for (const b of document.querySelectorAll("#pad button")) {
+  const d = +b.dataset.d;
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); b.setPointerCapture(e.pointerId); hold(d); b.classList.add("on"); });
+  for (const ev of ["pointerup", "pointercancel"]) b.addEventListener(ev, () => { release(d); b.classList.remove("on"); });
+}
+// Drag anywhere on the level to walk that way (lift your finger to stop).
+let drag = null;
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); try { cv.setPointerCapture(e.pointerId); } catch {} drag = { id: e.pointerId, x: e.clientX, y: e.clientY, d: -1 }; });
+cv.addEventListener("pointermove", (e) => {
+  if (!drag || drag.id !== e.pointerId) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.hypot(dx, dy) < 18) return;
+  const d = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : dy > 0 ? 2 : 0;
+  if (d !== drag.d) { if (drag.d >= 0) release(drag.d); drag.d = d; hold(d); }
+});
+for (const ev of ["pointerup", "pointercancel"]) cv.addEventListener(ev, (e) => { if (drag && drag.id === e.pointerId) { if (drag.d >= 0) release(drag.d); drag = null; } });
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0, seenPhase = "";
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now; // the first frame can be timed before load: never negative
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick(dt, now); else host.wasHost = false;
+  const g = game();
+  if (g && LEVELS[g.lv]) {
+    const L = LEVELS[g.lv];
+    myTick(now, g, L);
+    updateViews(g, dt, now);
+    if (g.phase + keyOf(g) !== seenPhase) {
+      seenPhase = g.phase + keyOf(g);
+      if (g.phase === "clear") {
+        toast(g.lv + 1 < LEVELS.length || ATTRACT ? "Level clear!" : "Warehouse cleared!", Math.min(2200, CONFIG.clearFor - 200));
+        for (let i = 0; i < 70; i++) sparks.push({ x: L.cols / 2, y: L.rows / 2, vx: (Math.random() - 0.5) * 16, vy: (Math.random() - 0.5) * 12, life: 1.2 + Math.random() * 0.6, color: COLORS[i % COLORS.length], s: 0.14 });
+        beep(660, 0.12); setTimeout(() => beep(880, 0.12), 120); setTimeout(() => beep(1320, 0.25), 240);
+      }
+    }
+    draw(g, L, dt, now / 1000, now);
+    if (now - lastHud > 150) { lastHud = now; hud(g, L, now); }
+  }
+  requestAnimationFrame(frame);
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("push", (msg, from) => { if (isHost()) applyPush(from, msg); });
+  net.on("vote", (msg, from) => { if (isHost()) applyVote(from, msg); });
+  net.on("again", () => { const g = game(); if (isHost() && g && g.phase === "done") newRun(g.id + 1); });
+  net.on("fx", (msg) => fx(msg && msg.s));
+  net.onDisconnect(() => { $("net").textContent = "Reconnecting…"; });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = takenColors();
+  myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  if (ATTRACT) Object.assign(CONFIG, { seats: 3, botStepMs: 125, botThinkMs: [80, 220], clearFor: 1600 });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

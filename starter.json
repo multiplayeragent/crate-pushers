@@ -1,0 +1,21 @@
+{
+  "name": "Crate Pushers",
+  "genre": "puzzle",
+  "dim": "2D",
+  "mode": "Co-op",
+  "players": "1–4",
+  "hook": "Push every crate onto its pad. Steel takes two.",
+  "how": "Walk into a crate to push it and get every crate onto a matching pad. Steel crates only move when two of you line up behind and push together. Stuck? Vote to undo the last push or reset the level. Five hand-made levels.",
+  "controls": "Arrow keys or WASD, Z to undo, R to reset; on touch, the D-pad or drag on the level",
+  "uses": [
+    ["Host-run rules", "The host's browser moves the crates and checks who is pushing; if it leaves, the next player takes over."],
+    ["Bots", "Alone? A buddy bot pushes wood crates, backs you up on steel ones and asks for a hand."],
+    ["Leaderboard", "The fastest crew through all five levels."],
+    ["Live sync", "Everyone walks, pushes and votes in the same warehouse."]
+  ],
+  "ideas": [
+    "Add ice tiles that make crates slide until they hit a wall",
+    "Add a level where a crate needs three pushers",
+    "Turn the warehouse into a pirate ship with treasure chests"
+  ]
+}
