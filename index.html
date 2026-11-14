@@ -26,7 +26,7 @@
   .card { width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 22px; border-radius: 16px; background: #2a2346; border: 1px solid #ffffff22; text-align: center; box-sizing: border-box; }
   .card h2 { margin: 0 0 4px; font-size: 26px; color: #ffd23f; }
   .card h3 { margin: 14px 0 4px; font-size: 14px; color: #ffb347; text-align: left; }
-  .card ol { text-align: left; margin: 0; padding-left: 24px; font-size: 14px; } .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card ol { text-align: left; margin: 0; padding-left: 24px; font-size: 14px; } .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.note { list-style: none; margin-left: -24px; opacity: .8; }
   button.go { width: 100%; min-height: 48px; margin-top: 14px; border: 0; border-radius: 12px; background: #52d273; color: #07210f; font: 800 17px system-ui, sans-serif; cursor: pointer; }
   #pad { position: fixed; left: max(14px, env(safe-area-inset-left)); bottom: calc(max(14px, env(safe-area-inset-bottom)) + 18px); width: 174px; height: 174px; display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr); gap: 3px; }
   #pad button { border-radius: 14px; border: 2px solid #ffffff55; background: #ffffff1c; color: #fff; font: 800 20px system-ui, sans-serif; touch-action: none; padding: 0; }
@@ -48,7 +48,7 @@
 <div id="over" hidden><div class="card">
   <h2>Warehouse cleared!</h2>
   <div id="doneTime"></div>
-  <h3>Fastest crews</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Fastest crews</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="again">Play again</button>
 </div></div>
 <script>
@@ -322,7 +322,8 @@ function hostTick(dt, now) {
   if (!host.wasHost) adopt();
   let g = game();
   if (!g) g = newRun(1);
-  const L = LEVELS[g.lv], t = Date.now();
+  let L = LEVELS[g.lv];
+  const t = Date.now();
   if (host.key !== keyOf(g)) resetBots(g, L, now);
   if (now - host.lastSync > 1000) { host.lastSync = now; syncBots(g, L, now); }
   if (g.phase === "play") {
@@ -333,6 +334,7 @@ function hostTick(dt, now) {
     const n = nextLevel(g.lv);
     g = n < LEVELS.length ? startLevel(g, n, 0) : writeGame({ ...g, phase: "done", endsAt: t + CONFIG.doneFor, total: t - g.runAt });
   } else if (g.phase === "done" && t > g.endsAt) g = newRun(g.id + 1);
+  if (host.key !== keyOf(g)) { L = LEVELS[g.lv]; resetBots(g, L, now); } // a level (re)started just now: bots drop jobs from the old one
   for (const [id, p] of host.pushes) if (now - p.at > 3000) host.pushes.delete(id);
   const all = bodies(g);
   assignHelpers(g, L, all, now);
@@ -433,7 +435,7 @@ function freeNear(L, g, x, y, all) {
   return { x, y };
 }
 function resetBots(g, L, now) {
-  host.key = keyOf(g); syncBots(g, L, now);
+  host.key = keyOf(g); host.pushes.clear(); host.touched.clear(); syncBots(g, L, now); // pushes name crates by index: none carry over to a new level
   const humans = humanIds().length; let n = humans;
   for (const b of host.bots.values()) { const s = L.spawns[n++ % L.spawns.length]; placeBot(b, s.x, s.y); b.job = null; b.helping = null; b.busyUntil = now + CONFIG.botStartMs + rnd(...CONFIG.botThinkMs); }
 }
@@ -765,7 +767,7 @@ function hud(g, L, now) {
   const v = g.vote, n = livePlayers().length;
   if (v && v.endsAt > t && g.phase === "play") {
     const yes = v.yes.filter((id) => livePlayers().includes(id)).length, mine = v.yes.includes(net.sessionId);
-    $("vote").textContent = `${v.by === myName && mine ? "You want" : esc(v.by) + " wants"} to ${v.k === "undo" ? "undo the last push" : "reset the level"} · ${yes}/${votesNeeded()} · ${mine ? "waiting for the others" : `tap ${v.k === "undo" ? "Undo" : "Reset"} to agree`} · ${Math.ceil((v.endsAt - t) / 1000)}s`;
+    $("vote").textContent = `${v.by === myName && mine ? "You want" : v.by + " wants"} to ${v.k === "undo" ? "undo the last push" : "reset the level"} · ${yes}/${votesNeeded()} · ${mine ? "waiting for the others" : `tap ${v.k === "undo" ? "Undo" : "Reset"} to agree`} · ${Math.ceil((v.endsAt - t) / 1000)}s`;
   } else $("vote").textContent = "";
   $("undo").classList.toggle("on", !!(v && v.k === "undo" && v.endsAt > t)); $("reset").classList.toggle("on", !!(v && v.k === "reset" && v.endsAt > t));
   $("net").textContent = net.offline ? "Offline: playing with bots" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the warehouse" : ""}`;
@@ -776,12 +778,12 @@ function hud(g, L, now) {
 function showDone(g) {
   $("doneTime").textContent = `All ${LEVELS.length} levels in ${fmt(g.total)}`;
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  if (!board) { list.innerHTML = "<li class='note'>Leaderboards need a connection.</li>"; return; }
   const submit = me.fromStart && me.submitted !== g.id ? board.submit(Math.max(0, 3600000 - g.total)).catch(() => null) : Promise.resolve();
-  me.submitted = g.id; list.innerHTML = "<li>Loading…</li>";
+  me.submitted = g.id; list.innerHTML = "<li class='note'>Loading…</li>";
   submit.then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${fmt(3600000 - e.score)}</span></li>`).join("") : "<li>No runs yet. Set the first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${fmt(3600000 - e.score)}</span></li>`).join("") : "<li class='note'>No runs yet. Set the first.</li>";
+  }).catch(() => { list.innerHTML = "<li class='note'>Couldn't load the leaderboard.</li>"; });
 }
 $("again").onclick = () => { const g = game(); if (!g || g.phase !== "done") return; if (isHost()) newRun(g.id + 1); else net.send("again", {}); };
 function vote(k) { wake(); const g = game(); if (!g || g.phase !== "play" || ATTRACT) return; if (isHost()) applyVote(net.sessionId, { k }); else net.send("vote", { k }); blip(); }
@@ -817,11 +819,11 @@ const KEYS = { ArrowUp: 0, w: 0, W: 0, ArrowRight: 1, d: 1, D: 1, ArrowDown: 2, 
 addEventListener("keydown", (e) => {
   wake(); const d = KEYS[e.key];
   if (d !== undefined) { e.preventDefault(); if (!e.repeat) { hold(d); me.nextAt = Math.min(me.nextAt, performance.now() + 30); } }
-  if ((e.key === "z" || e.key === "Z" || e.key === "u") && !e.repeat) vote("undo");
+  if ((e.key === "z" || e.key === "Z" || e.key === "u" || e.key === "U") && !e.repeat) vote("undo");
   if ((e.key === "r" || e.key === "R") && !e.repeat) vote("reset");
 });
 addEventListener("keyup", (e) => { const d = KEYS[e.key]; if (d !== undefined) release(d); });
-addEventListener("blur", () => { held.length = 0; });
+addEventListener("blur", () => { held.length = 0; drag = null; for (const b of document.querySelectorAll("#pad button.on")) b.classList.remove("on"); }); // tab switch mid-walk: stop
 for (const b of document.querySelectorAll("#pad button")) {
   const d = +b.dataset.d;
   b.addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); b.setPointerCapture(e.pointerId); hold(d); b.classList.add("on"); });
@@ -829,7 +831,8 @@ for (const b of document.querySelectorAll("#pad button")) {
 }
 // Drag anywhere on the level to walk that way (lift your finger to stop).
 let drag = null;
-cv.addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); try { cv.setPointerCapture(e.pointerId); } catch {} drag = { id: e.pointerId, x: e.clientX, y: e.clientY, d: -1 }; });
+cv.addEventListener("contextmenu", (e) => e.preventDefault()); // right-click: no browser menu
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); wake(); if (e.button !== 0) return; try { cv.setPointerCapture(e.pointerId); } catch {} drag = { id: e.pointerId, x: e.clientX, y: e.clientY, d: -1 }; });
 cv.addEventListener("pointermove", (e) => {
   if (!drag || drag.id !== e.pointerId) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.hypot(dx, dy) < 18) return;
