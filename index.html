@@ -266,6 +266,7 @@ function applyPush(from, m) {
   const g = game(); if (!g || g.phase !== "play" || !m) return false;
   const i = m.i | 0, d = m.d | 0, c = g.cr[i];
   if (!c || c[0] !== m.x || c[1] !== m.y || d < 0 || d > 3) return false;
+  if (!Number.isInteger(m.px) || !Number.isInteger(m.py)) return false;
   const k = Math.abs(m.px - m.x) + Math.abs(m.py - m.y); // how far back in the line the pusher stands
   if (k < 1 || k > 4 || m.px !== m.x - DX[d] * k || m.py !== m.y - DY[d] * k) return false;
   const now = performance.now();
@@ -278,7 +279,7 @@ function tryMove(g, i, d, now) {
   const L = LEVELS[g.lv], [x, y] = g.cr[i], line = [];
   for (let k = 1; k <= 4; k++) { // everyone standing in one unbroken line behind the crate, all pushing
     const cx = x - DX[d] * k, cy = y - DY[d] * k;
-    const hit = [...host.pushes].find(([, p]) => !p.used && p.i === i && p.d === d && p.x === cx && p.y === cy && now - p.at < CONFIG.pushWindow);
+    const hit = [...host.pushes].find(([id, p]) => !p.used && p.i === i && p.d === d && p.x === cx && p.y === cy && now - p.at < CONFIG.pushWindow && standsAt(id, cx, cy, g));
     if (!hit) break;
     line.push(hit[0]);
   }
@@ -295,6 +296,13 @@ function tryMove(g, i, d, now) {
   writeHist(keyOf(g));
   host.lastMoveAt = now;
   return true;
+}
+/** Is player or bot `id` really standing on (x, y) in this level? A push only counts from where you stand.
+ *  A player's step can reach the host a moment after its push, so hostTick tries waiting pushes again. */
+function standsAt(id, x, y, g) {
+  const b = host.bots.get(id); if (b) return b.x === x && b.y === y;
+  if (id === net.sessionId) return me.key === keyOf(g) && me.x === x && me.y === y;
+  const s = posOf(id); return !!s && s.k === keyOf(g) && s.x === x && s.y === y;
 }
 /** A "vote" intent: start or join an undo/reset vote. It passes once more than half the players agree. */
 function applyVote(from, m) {
@@ -336,6 +344,7 @@ function hostTick(dt, now) {
   } else if (g.phase === "done" && t > g.endsAt) g = newRun(g.id + 1);
   if (host.key !== keyOf(g)) { L = LEVELS[g.lv]; resetBots(g, L, now); } // a level (re)started just now: bots drop jobs from the old one
   for (const [id, p] of host.pushes) if (now - p.at > 3000) host.pushes.delete(id);
+  if (g.phase === "play") for (const p of host.pushes.values()) if (!p.used && now - p.at < CONFIG.pushWindow && tryMove(g, p.i, p.d, now)) g = game(); // a push that came before its pusher's step
   const all = bodies(g);
   assignHelpers(g, L, all, now);
   for (const b of host.bots.values()) botTick(b, now, g, L, all);
@@ -447,7 +456,7 @@ function assignHelpers(g, L, all, now) {
   const leads = [], bots = [...host.bots.values()];
   for (const [id, p] of host.pushes) {
     const c = g.cr[p.i], hx = p.x - DX[p.d], hy = p.y - DY[p.d];
-    if (!host.bots.has(id) && L.crates[p.i].heavy && now - p.at < 1800 && c[0] === p.x + DX[p.d] && c[1] === p.y + DY[p.d] && isFloor(L, hx, hy) && crateAt(g, hx, hy) < 0) leads.push({ id, i: p.i, d: p.d, x: p.x, y: p.y, human: true });
+    if (!host.bots.has(id) && L.crates[p.i].heavy && now - p.at < 1800 && standsAt(id, p.x, p.y, g) && c[0] === p.x + DX[p.d] && c[1] === p.y + DY[p.d] && isFloor(L, hx, hy) && crateAt(g, hx, hy) < 0) leads.push({ id, i: p.i, d: p.d, x: p.x, y: p.y, human: true });
   }
   for (const b of bots) if (b.job && b.job.wait) {
     leads.push({ id: b.id, i: b.job.i, d: b.job.wait.d, x: b.x, y: b.y });
@@ -554,7 +563,7 @@ function stepAside(b, g, L, others, from, now) {
 const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() ||
   ["Brave", "Clever", "Steady", "Happy", "Quick", "Lucky"][Math.floor(Math.random() * 6)] + " " + ["Mover", "Packer", "Loader", "Porter", "Hauler"][Math.floor(Math.random() * 5)];
 let myColor = COLORS[0]; // picked on join: the first color nobody in the room has
-const me = { x: 1, y: 1, f: 1, ax: 1, ay: 1, moveAt: 0, nextAt: 0, key: "", un: 0, pend: null, lastPush: 0, sent: "", fromStart: false, submitted: -1, steelTip: 0 };
+const me = { x: 1, y: 1, f: 1, ax: 1, ay: 1, moveAt: 0, nextAt: 0, key: "", un: 0, pend: null, lastPush: 0, sent: "", fromStart: false, submitted: -1, run: -1, steelTip: 0 };
 const held = []; // directions held down, newest last
 
 /** Everyone standing in this level: [{ id, x, y, f, bot, mine }]. Players from their own reports, bots from the host. */
@@ -575,13 +584,14 @@ function stepMe(d, now) { me.ax = me.x; me.ay = me.y; me.x += DX[d]; me.y += DY[
 
 function myTick(now, g, L) {
   if (me.key !== keyOf(g)) { // new level or a reset: to my spawn (players take the first spawns in sessionId order)
-    if (g.lv === (ATTRACT ? 3 : 0) && g.tr === 0 && g.phase === "play" && Date.now() - g.runAt < 8000) me.fromStart = true;
+    if (me.run !== g.id) { me.run = g.id; me.fromStart = g.lv === (ATTRACT ? 3 : 0) && g.tr === 0 && g.phase === "play" && Date.now() - g.runAt < 8000; } // only a run you saw start goes on the leaderboard
     const s0 = L.spawns[Math.max(0, livePlayers().indexOf(net.sessionId)) % L.spawns.length], s = g.tr || g.mv ? freeNear(L, g, s0.x, s0.y, bodies(g)) : s0;
     place(s.x, s.y); me.key = keyOf(g); me.un = g.un || 0; me.pend = null; $("over").hidden = true;
     if (!ATTRACT) toast(g.tr ? "Level reset" : `Level ${g.lv + 1}: ${L.name}`, 1600);
     publish();
   }
   if ((g.un || 0) !== me.un) { me.un = g.un || 0; const p = g.back && g.back[net.sessionId]; if (p) place(p[0], p[1]); me.pend = null; publish(); }
+  if (me.key === keyOf(g) && crateAt(g, me.x, me.y) >= 0) { const s = freeNear(L, g, me.x, me.y, bodies(g)); place(s.x, s.y); me.pend = null; publish(); } // an undo put a crate where I stand: step out
   if (me.pend) { // leaning on a crate: when it moves, step after it
     const c = g.cr[me.pend.i], d = me.pend.d;
     if (c && c[0] === me.pend.x + DX[d] && c[1] === me.pend.y + DY[d]) { me.pend = null; stepMe(d, now); thud(); }
